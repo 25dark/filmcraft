@@ -1,0 +1,43 @@
+name: Verify Studio authenticated control bridge
+on:
+  push:
+    branches:
+      - feat/overlord-studio-control-auth
+    paths:
+      - 'apps/filmcraft/src/control_server.rs'
+      - '.github/workflows/studio-control-verify.yml'
+      - 'docs/overlord-studio-control.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: filmcraft-studio-control-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control:
+    name: Test FilmCraft control channel on Windows
+    runs-on: windows-2022
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: studio-control-windows
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and test authenticated control protocol
+        run: cargo test -p filmcraft --bin filmcraft control_server::tests
+      - name: Confirm native editor compiles
+        run: cargo build --release -p filmcraft
+      - name: Check binary exists (no public redistribution)
+        shell: pwsh
+        run: |
+          if (!(Test-Path target/release/filmcraft.exe)) { throw 'Native filmcraft.exe was not built' }
+          Write-Host 'Windows x64 FilmCraft engine compiled. Keep test binary local until fork branding/licensing audit.'
