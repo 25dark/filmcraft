@@ -476,6 +476,7 @@ pub fn inspect(app: &FilmcraftApp, ctx: &egui::Context) -> Value {
         "elements": app.auto.previous.len(),
         "dialog": app.dialog.map(|d| format!("{d:?}")),
         "studioPanelCaptureProtected": true,
+        "studioAudioTrackState": true,
     })
 }
 
