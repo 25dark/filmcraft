@@ -413,24 +413,14 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
 /// A scoped screenshot MUST refuse to capture the whole window if the
 /// caller's selected panel/element disappears before the screenshot event.
 /// This is particularly important for OVERLORD Studio's video frame bridge.
-fn studio_capture_crop(
-    auto: &crate::automation::Registry,
-    panel: Option<&str>,
-    id: Option<&str>,
-) -> Result<Option<[f32; 4]>, String> {
+fn studio_capture_crop(auto: &crate::automation::Registry, panel: Option<&str>, id: Option<&str>) -> Result<Option<[f32; 4]>, String> {
     if let Some(name) = panel {
         let kind = PanelKind::from_name(name).ok_or_else(|| format!("unknown screenshot panel: {name}"))?;
         let identity = format!("panel.{}", kind.id());
-        return auto
-            .find(&identity)
-            .map(|element| Some(element.rect))
-            .ok_or_else(|| format!("screenshot panel not visible: {name}"));
+        return auto.find(&identity).map(|element| Some(element.rect)).ok_or_else(|| format!("screenshot panel not visible: {name}"));
     }
     if let Some(identity) = id {
-        return auto
-            .find(identity)
-            .map(|element| Some(element.rect))
-            .ok_or_else(|| format!("screenshot element not visible: {identity}"));
+        return auto.find(identity).map(|element| Some(element.rect)).ok_or_else(|| format!("screenshot element not visible: {identity}"));
     }
     Ok(None)
 }
