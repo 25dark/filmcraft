@@ -380,6 +380,56 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
             }
             ok(json!({"playing": app.playback.playing, "playhead": app.session.playhead().0}))
         }
+        "ui.program.frame" => {
+            // Studio-only decoded/composited frame transport. Unlike screenshots,
+            // this samples the native FrameServer and NEVER captures the window.
+            if !std::env::var("FILMCRAFT_CONTROL_TOKEN").is_ok_and(|token| !token.is_empty()) {
+                return err("Studio native frame transport requires authenticated control");
+            }
+            let Some(path) = s("path") else { return err("need native RGBA output path") };
+            let output = std::path::Path::new(path);
+            if !output.is_absolute() || output.extension().and_then(|ext| ext.to_str()) != Some("rgba") {
+                return err("need absolute .rgba frame output path");
+            }
+            let Some(id) = app.session.state.active_sequence else {
+                return ok(json!({"ready": false, "reason": "no-sequence"}));
+            };
+            let Some(sequence) = app.session.active_sequence() else {
+                return ok(json!({"ready": false, "reason": "no-sequence"}));
+            };
+            let (width, height, rate) = (sequence.settings.width, sequence.settings.height, sequence.settings.frame_rate);
+            let scale = studio_program_scale(width, height);
+            let frame = rate.frame_at(app.session.playhead()).max(0);
+            let revision = app.session.revision;
+            let key = crate::frames::FrameKey {
+                target: crate::frames::Target::Sequence(id),
+                frame,
+                size: (scale * 1000.0) as u32,
+                revision,
+                draft: false,
+            };
+            if p.get("afterFrame").and_then(Value::as_i64) == Some(frame)
+                && p.get("afterRevision").and_then(Value::as_u64) == Some(revision)
+            {
+                return ok(json!({"ready": false, "reason": "unchanged", "frame": frame, "revision": revision}));
+            }
+            // No synchronous decode/render on the UI thread. The same native
+            // CPU compositor used by FilmCraft's Program monitor does the work.
+            let Some(img) = app.frames.get(&key) else {
+                app.frames.request(key, rate.tick_of(frame), scale, &app.session.project, 3);
+                return ok(json!({"ready": false, "reason": "decoding", "frame": frame, "revision": revision}));
+            };
+            if !studio_program_frame_valid(img.w, img.h, img.px.len()) {
+                return err("native Program frame exceeds safe RGBA dimensions");
+            }
+            match std::fs::write(output, &img.px) {
+                Ok(()) => ok(json!({
+                    "ready": true, "path": path, "width": img.w, "height": img.h,
+                    "frame": frame, "revision": revision,
+                })),
+                Err(error) => err(format!("unable to deliver native Program frame: {error}")),
+            }
+        }
         "ui.screenshot" => {
             // If a panel is explicitly requested, NEVER fall back to capturing
             // the full FilmCraft window when the panel is closed/transitioning.
@@ -407,6 +457,38 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
             ok(Value::Null)
         }
         m => err(format!("unknown method `{m}`")),
+    }
+}
+
+/// Studio's low-resolution native Program feed remains bounded even with 8K
+/// footage; final export always uses FilmCraft's separate full-resolution path.
+fn studio_program_scale(width: u32, height: u32) -> f32 {
+    let w = width.max(1) as f32;
+    let h = height.max(1) as f32;
+    (960.0 / w).min(540.0 / h).min(1.0).max(1.0 / 32.0)
+}
+
+fn studio_program_frame_valid(width: usize, height: usize, bytes: usize) -> bool {
+    width > 0 && height > 0 && width <= 960 && height <= 540 && width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        == Some(bytes)
+}
+
+#[cfg(test)]
+mod studio_program_frame_tests {
+    use super::*;
+
+    #[test]
+    fn native_program_transport_is_bounded_without_window_capture() {
+        assert_eq!(studio_program_scale(1920, 1080), 0.5);
+        assert_eq!(studio_program_scale(3840, 2160), 0.25);
+        assert_eq!(studio_program_scale(7680, 4320), 0.125);
+        assert_eq!(studio_program_scale(640, 360), 1.0);
+        assert!(studio_program_frame_valid(960, 540, 960 * 540 * 4));
+        assert!(!studio_program_frame_valid(960, 540, 960 * 540 * 4 - 1));
+        assert!(!studio_program_frame_valid(1920, 1080, 1920 * 1080 * 4));
+        assert!(!studio_program_frame_valid(0, 540, 0));
     }
 }
 
@@ -477,6 +559,7 @@ pub fn inspect(app: &FilmcraftApp, ctx: &egui::Context) -> Value {
         "dialog": app.dialog.map(|d| format!("{d:?}")),
         "studioPanelCaptureProtected": true,
         "studioAudioTrackState": true,
+        "studioDecodedProgramFrames": true,
     })
 }
 

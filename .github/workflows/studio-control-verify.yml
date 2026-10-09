@@ -38,6 +38,8 @@ jobs:
         run: cargo test -p filmcraft --bin filmcraft control_server::tests
       - name: Test fail-closed Program-panel screenshot scoping
         run: cargo test -p filmcraft-ui-egui studio_capture_tests
+      - name: Test bounded decoded Program frames
+        run: cargo test -p filmcraft-ui-egui studio_program_frame_tests
       - name: Confirm native editor compiles
         run: cargo build --release -p filmcraft
       - name: Check binary exists (no public redistribution)
