@@ -6,6 +6,7 @@ on:
     paths:
       - 'apps/filmcraft/src/control_server.rs'
       - 'crates/ui-egui/src/control.rs'
+      - 'crates/engine/src/commands.rs'
       - '.github/workflows/studio-control-verify.yml'
       - 'docs/overlord-studio-control.md'
   workflow_dispatch:
