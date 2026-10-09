@@ -401,16 +401,8 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
             let scale = studio_program_scale(width, height);
             let frame = rate.frame_at(app.session.playhead()).max(0);
             let revision = app.session.revision;
-            let key = crate::frames::FrameKey {
-                target: crate::frames::Target::Sequence(id),
-                frame,
-                size: (scale * 1000.0) as u32,
-                revision,
-                draft: false,
-            };
-            if p.get("afterFrame").and_then(Value::as_i64) == Some(frame)
-                && p.get("afterRevision").and_then(Value::as_u64) == Some(revision)
-            {
+            let key = crate::frames::FrameKey { target: crate::frames::Target::Sequence(id), frame, size: (scale * 1000.0) as u32, revision, draft: false };
+            if p.get("afterFrame").and_then(Value::as_i64) == Some(frame) && p.get("afterRevision").and_then(Value::as_u64) == Some(revision) {
                 return ok(json!({"ready": false, "reason": "unchanged", "frame": frame, "revision": revision}));
             }
             // No synchronous decode/render on the UI thread. The same native
@@ -469,10 +461,7 @@ fn studio_program_scale(width: u32, height: u32) -> f32 {
 }
 
 fn studio_program_frame_valid(width: usize, height: usize, bytes: usize) -> bool {
-    width > 0 && height > 0 && width <= 960 && height <= 540 && width
-        .checked_mul(height)
-        .and_then(|pixels| pixels.checked_mul(4))
-        == Some(bytes)
+    width > 0 && height > 0 && width <= 960 && height <= 540 && width.checked_mul(height).and_then(|pixels| pixels.checked_mul(4)) == Some(bytes)
 }
 
 #[cfg(test)]
