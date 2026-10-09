@@ -3284,6 +3284,27 @@ pub fn inspect_sequence(s: &Session, id: ItemId, q: &filmcraft_project::Sequence
                 "startFrame": rate.frame_at(i.start), "durationFrames": rate.frame_at(i.duration), "sourceIn": i.source_in.0, "speed": i.speed, "reverse": i.reverse,
                 "end": i.end().0, "endFrame": rate.frame_at(i.end()), "sourceOut": i.source_out().0, "gainDb": i.gain_db,
                 "enabled": i.enabled, "link": i.link, "label": i.label.name(),
+                // Numeric base Lumetri values for Studio's clip controls. The old
+                // effects inspector keeps its debug-only parameter descriptions
+                // for backwards compatibility. Keyframed clips are flagged so
+                // Studio cannot accidentally overwrite animated corrections.
+                "lumetriBasic": i.effects.iter().find(|e| e.effect == "lumetri").map(|e| {
+                    let numeric = |name: &str, def: f64| e.params.get(name).and_then(|p| p.value.as_f64()).unwrap_or(def);
+                    let keys = ["temperature", "tint", "exposure", "contrast", "highlights", "shadows", "whites", "blacks", "saturation"];
+                    json!({
+                        "enabled": e.enabled,
+                        "keyframed": keys.iter().any(|k| e.params.get(*k).is_some_and(|p| !p.keyframes.is_empty())),
+                        "temperature": numeric("temperature", 0.0),
+                        "tint": numeric("tint", 0.0),
+                        "exposure": numeric("exposure", 0.0),
+                        "contrast": numeric("contrast", 0.0),
+                        "highlights": numeric("highlights", 0.0),
+                        "shadows": numeric("shadows", 0.0),
+                        "whites": numeric("whites", 0.0),
+                        "blacks": numeric("blacks", 0.0),
+                        "saturation": numeric("saturation", 100.0),
+                    })
+                }),
                 "effects": i.effects.iter().map(|e| json!({"effect": e.effect, "enabled": e.enabled, "masks": e.masks.len(), "params": e.params.iter().map(|(k, p)| (k.clone(), json!({"value": format!("{:?}", p.value), "keyframes": p.keyframes.len()}))).collect::<serde_json::Map<_, _>>()})).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "transitions": t.transitions.iter().map(|x| json!({"id": x.id.0, "effect": x.effect.effect, "start": x.start.0, "duration": x.duration.0, "from": x.from.map(|c| c.0), "to": x.to.map(|c| c.0), "reverse": x.reverse, "params": x.effect.params.iter().map(|(k, v)| (k.clone(), serde_json::to_value(&v.value).unwrap_or_default())).collect::<serde_json::Map<_, _>>()})).collect::<Vec<_>>(),
