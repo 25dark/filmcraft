@@ -34,6 +34,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Compile and test authenticated control protocol
         run: cargo test -p filmcraft --bin filmcraft control_server::tests
+      - name: Test fail-closed Program-panel screenshot scoping
+        run: cargo test -p filmcraft-ui-egui studio_capture_tests
       - name: Confirm native editor compiles
         run: cargo build --release -p filmcraft
       - name: Check binary exists (no public redistribution)

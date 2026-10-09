@@ -381,8 +381,12 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
             ok(json!({"playing": app.playback.playing, "playhead": app.session.playhead().0}))
         }
         "ui.screenshot" => {
-            let crop = s("panel").and_then(PanelKind::from_name).and_then(|pk| app.auto.find(&format!("panel.{}", pk.id())).map(|e| e.rect));
-            let crop = crop.or_else(|| s("id").and_then(|id| app.auto.find(id).map(|e| e.rect)));
+            // If a panel is explicitly requested, NEVER fall back to capturing
+            // the full FilmCraft window when the panel is closed/transitioning.
+            let crop = match studio_capture_crop(&app.auto, s("panel"), s("id")) {
+                Ok(crop) => crop,
+                Err(message) => return err(message),
+            };
             // Bring the window on screen so a frame is presented, without taking keyboard focus.
             app.raise_for_control(ctx);
             Outcome::Screenshot { path: s("path").map(str::to_string), crop }
@@ -403,6 +407,50 @@ pub fn handle(app: &mut FilmcraftApp, ctx: &egui::Context, req: &ControlRequest)
             ok(Value::Null)
         }
         m => err(format!("unknown method `{m}`")),
+    }
+}
+
+/// A scoped screenshot MUST refuse to capture the whole window if the
+/// caller's selected panel/element disappears before the screenshot event.
+/// This is particularly important for OVERLORD Studio's video frame bridge.
+fn studio_capture_crop(
+    auto: &crate::automation::Registry,
+    panel: Option<&str>,
+    id: Option<&str>,
+) -> Result<Option<[f32; 4]>, String> {
+    if let Some(name) = panel {
+        let kind = PanelKind::from_name(name).ok_or_else(|| format!("unknown screenshot panel: {name}"))?;
+        let identity = format!("panel.{}", kind.id());
+        return auto
+            .find(&identity)
+            .map(|element| Some(element.rect))
+            .ok_or_else(|| format!("screenshot panel not visible: {name}"));
+    }
+    if let Some(identity) = id {
+        return auto
+            .find(identity)
+            .map(|element| Some(element.rect))
+            .ok_or_else(|| format!("screenshot element not visible: {identity}"));
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod studio_capture_tests {
+    use super::*;
+
+    #[test]
+    fn scoped_capture_fails_closed_without_program_panel() {
+        let mut auto = crate::automation::Registry::default();
+        assert!(studio_capture_crop(&auto, Some("Program"), None).is_err());
+        assert!(studio_capture_crop(&auto, Some("DoesNotExist"), None).is_err());
+        assert!(studio_capture_crop(&auto, None, Some("missing.item")).is_err());
+        assert_eq!(studio_capture_crop(&auto, None, None).unwrap(), None);
+
+        let rect = egui::Rect::from_min_size(egui::pos2(1.0, 2.0), egui::vec2(90.0, 45.0));
+        auto.add("panel.Program", rect, "Program");
+        auto.begin_frame();
+        assert_eq!(studio_capture_crop(&auto, Some("Program"), None).unwrap(), Some([1.0, 2.0, 90.0, 45.0]));
     }
 }
 
@@ -437,6 +485,7 @@ pub fn inspect(app: &FilmcraftApp, ctx: &egui::Context) -> Value {
         "selection": app.session.state.selection.iter().map(|c| c.0).collect::<Vec<_>>(),
         "elements": app.auto.previous.len(),
         "dialog": app.dialog.map(|d| format!("{d:?}")),
+        "studioPanelCaptureProtected": true,
     })
 }
 
