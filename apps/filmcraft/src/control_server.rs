@@ -75,7 +75,9 @@ impl Drop for Slot {
 /// Remove the sidecar credential before forwarding commands into FilmCraft.
 fn authenticated_params(mut params: Value, required_token: Option<&str>) -> Result<Value, &'static str> {
     if let Some(expected) = required_token {
-        let Some(object) = params.as_object_mut() else { return Err("unauthorized"); };
+        let Some(object) = params.as_object_mut() else {
+            return Err("unauthorized");
+        };
         match object.remove("_opStudioToken") {
             Some(Value::String(provided)) if provided == expected => {}
             _ => return Err("unauthorized"),
