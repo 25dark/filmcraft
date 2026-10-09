@@ -23,6 +23,9 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 pub const MAX_CONNECTIONS: usize = 16;
 
 pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
+    // Optional protocol authentication for OVERLORD Studio's managed sidecar.
+    // An unset token preserves the standalone desktop/CLI control workflow.
+    let auth_token = std::env::var("FILMCRAFT_CONTROL_TOKEN").ok().filter(|token| !token.is_empty());
     let (tx, rx) = channel::<ControlRequest>();
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
@@ -32,11 +35,11 @@ pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
         }
     };
     eprintln!("filmcraft: control server listening on 127.0.0.1:{port}");
-    std::thread::spawn(move || accept_loop(listener, tx, ctx));
+    std::thread::spawn(move || accept_loop(listener, tx, ctx, auth_token));
     rx
 }
 
-fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context) {
+fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context, auth_token: Option<String>) {
     let open = Arc::new(AtomicUsize::new(0));
     for mut stream in listener.incoming().flatten() {
         if open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
@@ -46,12 +49,13 @@ fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Con
         }
         let tx = tx.clone();
         let ctx = ctx.clone();
+        let auth_token = auth_token.clone();
         // The slot is given back when the guard drops: after `serve` returns, if it panics, or if
         // the thread can't be started (the closure, and with it the guard, is dropped).
         let slot = Slot(Arc::clone(&open));
         let spawned = std::thread::Builder::new().name("control-conn".into()).spawn(move || {
             let _slot = slot;
-            serve(stream, &tx, &ctx);
+            serve(stream, &tx, &ctx, auth_token.as_deref());
         });
         if let Err(e) = spawned {
             eprintln!("filmcraft: control server could not start a connection thread: {e}");
@@ -68,9 +72,25 @@ impl Drop for Slot {
     }
 }
 
-fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context) {
+/// Remove the sidecar credential before forwarding commands into FilmCraft.
+fn authenticated_params(mut params: Value, required_token: Option<&str>) -> Result<Value, &'static str> {
+    if let Some(expected) = required_token {
+        let Some(object) = params.as_object_mut() else { return Err("unauthorized"); };
+        match object.remove("_opStudioToken") {
+            Some(Value::String(provided)) if provided == expected => {}
+            _ => return Err("unauthorized"),
+        }
+    }
+    Ok(params)
+}
+
+fn serve(stream: TcpStream, tx: &Sender<ControlRequest>, ctx: &egui::Context, auth_token: Option<&str>) {
     let Ok(read) = stream.try_clone() else { return };
     serve_lines(read, stream, |method, params| {
+        let params = match authenticated_params(params, auth_token) {
+            Ok(params) => params,
+            Err(error) => return Some(json!({"ok":false,"error":error})),
+        };
         let (req, rrx) = ControlRequest::new(method, params);
         tx.send(req).ok()?;
         ctx.request_repaint();
@@ -181,6 +201,17 @@ mod tests {
     }
 
     #[test]
+    fn studio_control_token_is_required_and_removed_before_dispatch() {
+        let token = "different-every-session-32byte-secret";
+        assert!(authenticated_params(json!({}), Some(token)).is_err());
+        assert!(authenticated_params(json!({"_opStudioToken":"wrong"}), Some(token)).is_err());
+        assert!(authenticated_params(json!(null), Some(token)).is_err());
+        let got = authenticated_params(json!({"_opStudioToken":token,"action":"play"}), Some(token)).unwrap();
+        assert_eq!(got, json!({"action":"play"}));
+        assert!(authenticated_params(json!({}), None).is_ok());
+    }
+
+    #[test]
     fn requests_are_answered_in_order_with_ids() {
         let (r, calls) = run(b"{\"id\":1,\"method\":\"a\"}\n\n{\"id\":2,\"method\":\"b\",\"params\":{}}\r\n{\"method\":\"c\"}");
         assert_eq!(calls, ["a", "b", "c"]);
@@ -275,7 +306,7 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, _rx) = channel::<ControlRequest>();
-        std::thread::spawn(move || accept_loop(listener, tx, egui::Context::default()));
+        std::thread::spawn(move || accept_loop(listener, tx, egui::Context::default(), None));
         // Idle connections are accepted in order and held open.
         let held: Vec<TcpStream> = (0..16).map(|_| TcpStream::connect(addr).unwrap()).collect();
         let mut extra = TcpStream::connect(addr).unwrap();
